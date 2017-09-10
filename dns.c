@@ -76,9 +76,16 @@ int send_query(char* host,char* dns_ip, struct sockaddr_in* server_addr){
 		return 1;
 	}
 
+	printf("sent dns for %s\n",host);
+
 	return sock_fd;
 }
 
+/*
+ * 
+ * 
+ * 
+ */
 void copy_name_dns_format(char* qname,char* host){
 	int i,last_dot = 0,length = 0;
 
@@ -100,10 +107,119 @@ void copy_name_dns_format(char* qname,char* host){
 	qname[i+1] = '\0';
 }
 
+int recv_query(){
+
+	char buff[MAX_SIZE] = {0};
+	int sockfd;
+	struct sockaddr_in server_addr;
+	struct sockaddr_in serveraddr;
+	struct sockaddr_in clientaddr;
+	int clientlen = sizeof(clientaddr);
+	struct dns_packet* res = NULL;
+	char name[MAX_SIZE] = {0};
+	int n = 0;
+	char *dot = NULL;
+	int count = 0;
+	int client_fd;
+	int byte_read,addr_len = sizeof(server_addr);
+
+	//need to add check
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	if(sockfd < 0){
+		printf("error1 \n");
+		return;
+	}
+
+	bzero((char *) &serveraddr, sizeof(serveraddr));
+	serveraddr.sin_family = AF_INET;
+	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+	serveraddr.sin_port = htons((unsigned short)DNS_PORT);
+
+	//need to add check
+	n = bind(sockfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr));
+
+	if(n < 0){
+		printf("error2\n");
+		return;
+	}
+
+	while(1){
+		//need to add check
+		n = recvfrom(sockfd, buff, MAX_SIZE, 0, (struct sockaddr *) &clientaddr, &clientlen);
+		if(n < 0){
+			printf("error3\n");
+			return;
+		}
+
+		count++;
+		printf("%d\n",count);
+		res = (struct dns_packet*)&buff[0];
+		
+		if(res->qr == QUERY){
+
+			convert_dns_url(name,(char*)&buff[sizeof(struct dns_packet)]);
+			dot = strrchr(name, '.');
+			if(dot && !strcmp(dot, ".dor")){
+				//searching in db and send a response
+				printf("dorknet activated\n");
+			}
+			else{
+				//forwarding
+				
+				//creation of socket
+				client_fd = socket(AF_INET, SOCK_DGRAM, 0);
+				if(client_fd < 0){
+					perror("can't create socket");
+					return -1;
+				}
+
+				//config setting address
+				server_addr.sin_family = AF_INET;
+				server_addr.sin_port = htons(DNS_PORT);
+				server_addr.sin_addr.s_addr = inet_addr(DNS_SERVER_1);
+				memset(server_addr.sin_zero, 0, sizeof(server_addr.sin_zero));
+				
+				if(sendto(client_fd,buff, MAX_SIZE,0 ,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0){
+					perror("cant send");
+					return -1;
+				}
+				
+			}
+			
+			memset(buff,0,MAX_SIZE);	
+			
+		}
+		else{
+		
+			byte_read = recvfrom(client_fd, buff, MAX_SIZE, 0, (struct sockaddr*)&server_addr, (socklen_t*)&addr_len);
+			if(byte_read < 0){
+				perror("can't recv");
+				exit(1);
+			}
+			
+			if(sendto(sockfd,buff, MAX_SIZE,0 ,(struct sockaddr*)&clientaddr,sizeof(clientaddr)) < 0){
+				perror("cant send");
+				return -1;
+			}
+		
+			memset(buff,0,MAX_SIZE);
+		}
+	}
+
+	close(sockfd);
+	return n;
+}
+
+/*
+ * 
+ * 
+ * 
+ * 
+ */
 void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 
 	struct dns_packet* res = NULL;
-	//struct question* qes = NULL;
+	struct question* qes = NULL;
 	struct r_info* r_res = NULL;
 	char* name = NULL; 
 	char rdata[MAX_SIZE] = {0};
@@ -115,7 +231,9 @@ void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 	char buffer[MAX_SIZE] = {0};
 	int byte_read,addr_len = sizeof(*server_addr);
 	
+	printf("recving....\n");
 	byte_read = recvfrom(sock_fd, buffer, MAX_SIZE, 0, (struct sockaddr*)server_addr, (socklen_t*)&addr_len);
+	printf("bytes read: %dB\n",byte_read);
 	
 	if(byte_read < 0){
 		perror("can't recv");
@@ -130,6 +248,8 @@ void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 	printf("\n\t%d Authoritative Servers\n",ntohs(res->auth_count));
 	printf("\n\t%d Additional records\n",ntohs(res->add_count));
 
+
+	
 	current_pos += sizeof(struct dns_packet);
 	printf("\n");
 
@@ -139,6 +259,10 @@ void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 
 	current_pos += strlen(name)+1;
 	printf("\n");
+
+	qes = (struct question*)&buffer[current_pos];
+	printf("\n\tType data: %u\n",qes->q_type);
+	printf("\n\tClass data: %u\n",qes->q_class);
 
 	current_pos += sizeof(struct question);
 	
@@ -332,6 +456,15 @@ void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 	
 }
 
+
+
+/*
+ * 
+ * 
+ * 
+ * 
+ * 
+ */
 void free_response(response* ptr){
 
 	int q_count = ptr->info.q_count;

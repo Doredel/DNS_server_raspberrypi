@@ -6,6 +6,8 @@
 #include <netinet/in.h>
 #include <fcntl.h>
 
+#define DNS_SERVER_1 "213.57.22.5"
+
 #define DNS_PORT 53
 #define MAX_SIZE 1024
 
