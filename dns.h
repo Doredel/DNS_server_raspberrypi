@@ -6,10 +6,12 @@
 #include <netinet/in.h>
 #include <fcntl.h>
 
+#define DNS_SERVER_2 "8.8.8.8"
 #define DNS_SERVER_1 "213.57.22.5"
+#define LOCAL_IP "192.168.1.125"
 
 #define DNS_PORT 53
-#define MAX_SIZE 1024
+#define MAX_SIZE 2048
 
 #define QUERY 0x0000
 #define RESPONSE 0x0001
@@ -118,3 +120,5 @@ void convert_dns_url(char* new_name, char* name);
 void convert_ip4(char* data, char* rdata);
 
 void convert_name_ref(char* buffer, int index, char* rdata);
+
+void print_mem(int length, unsigned char* data);

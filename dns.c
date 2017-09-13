@@ -22,6 +22,7 @@ int send_query(char* host,char* dns_ip, struct sockaddr_in* server_addr){
 	struct question* quest = NULL;
 
 	int current_pos = 0;
+	int temp;
 
 	int sock_fd;
 	char buffer[MAX_SIZE]={0};
@@ -71,14 +72,61 @@ int send_query(char* host,char* dns_ip, struct sockaddr_in* server_addr){
 
 	current_pos += sizeof(struct question);
 
-	if(sendto(sock_fd,buffer, MAX_SIZE,0 ,(struct sockaddr*)server_addr,sizeof(*server_addr)) < 0){
+	if((temp = sendto(sock_fd,buffer, current_pos+1,0 ,(struct sockaddr*)server_addr,sizeof(*server_addr))) < 0){
 		perror("cant send");
 		return 1;
 	}
-
+	printf("sent %dB\n",temp);
 	printf("sent dns for %s\n",host);
 
 	return sock_fd;
+}
+
+void create_response(char* host){
+	struct dns_packet* dns_pack = NULL;
+	char* qname = NULL;
+	struct question* quest = NULL;
+	struct r_info* answer = NULL;
+
+	int current_pos = 0;
+	char buffer[MAX_SIZE]={0};
+	
+	dns_pack = (struct dns_packet*)&buffer[current_pos];
+
+	dns_pack->id = (unsigned short)htons(getpid());
+	dns_pack->qr = 1;
+	dns_pack->opcode = 0;
+	dns_pack->aa = 0;
+	dns_pack->tc = 0;
+	dns_pack->rd = 1;
+	dns_pack->ra = 0;
+	dns_pack->z = 0;
+	dns_pack->ad = 0;
+	dns_pack->cd = 0;
+	dns_pack->rcode = 0;
+
+	dns_pack->q_count = htons(1);
+	dns_pack->ans_count = htons(1);
+	dns_pack->auth_count = htons(0);
+	dns_pack->add_count = htons(0);
+
+	current_pos += sizeof(struct dns_packet);
+
+	qname = (char*)&buffer[current_pos];
+	copy_name_dns_format(qname,host);
+
+	current_pos += strlen(host)+2;
+
+	quest = (struct question*)&buffer[current_pos];
+	quest->q_type = htons(QTYPE_A);
+	quest->q_class = htons(QCLASS_IN); //internet
+
+	current_pos += sizeof(struct question);
+	
+	
+	
+	answer = (struct r_info*)&buffer[current_pos];
+	
 }
 
 /*
@@ -111,15 +159,20 @@ int recv_query(){
 
 	char buff[MAX_SIZE] = {0};
 	int sockfd;
+	
 	struct sockaddr_in server_addr;
 	struct sockaddr_in serveraddr;
 	struct sockaddr_in clientaddr;
+	
 	int clientlen = sizeof(clientaddr);
+	
 	struct dns_packet* res = NULL;
+	struct r_info* ans = NULL;
+	struct question* quest = NULL;
+	
 	char name[MAX_SIZE] = {0};
 	int n = 0;
-	char *dot = NULL;
-	int count = 0;
+	int current_pos = 0;
 	int client_fd;
 	int byte_read,addr_len = sizeof(server_addr);
 
@@ -143,29 +196,79 @@ int recv_query(){
 		return;
 	}
 
+	printf("ready!\n");
 	while(1){
 		//need to add check
+		memset(buff,0,MAX_SIZE);
+		current_pos = 0;
 		n = recvfrom(sockfd, buff, MAX_SIZE, 0, (struct sockaddr *) &clientaddr, &clientlen);
 		if(n < 0){
 			printf("error3\n");
 			return;
 		}
 
-		count++;
-		printf("%d\n",count);
-		res = (struct dns_packet*)&buff[0];
+		//count++;
+		//printf("%d\n",count);
+		res = (struct dns_packet*)&buff[current_pos];
 		
 		if(res->qr == QUERY){
 
 			convert_dns_url(name,(char*)&buff[sizeof(struct dns_packet)]);
-			dot = strrchr(name, '.');
-			if(dot && !strcmp(dot, ".dor")){
-				//searching in db and send a response
-				printf("dorknet activated\n");
+			printf("%s\n",name);
+			if(!strcmp(name, "www.hub.dor")){
+
+				res = (struct dns_packet*)&buff[current_pos];
+				
+				res->qr = RESPONSE;
+				res->q_count = htons(1);
+				res->ans_count = htons(1);
+				
+				res->auth_count = htons(0);
+				res->add_count = htons(0);
+				
+				
+				current_pos += sizeof(struct dns_packet);
+				current_pos += strlen(name)+1+1;
+				
+				
+				quest = (struct question*)&buff[current_pos];
+				if(quest->q_type != ntohs(QTYPE_A))
+					printf("off\n");
+				quest->q_type = quest->q_type;
+				quest->q_class = quest->q_class;
+				
+				current_pos += sizeof(struct question);
+				
+				ans = (struct r_info*)&buff[current_pos];
+				
+				ans->name = htons(0xc00c);
+				ans->type = quest->q_type;
+				ans->a_class = quest->q_class;
+				ans->ttl = htonl(3600);
+				ans->rdlength = htons(4);
+				
+				current_pos += sizeof(struct r_info);
+				
+				buff[current_pos] = 192;
+				buff[current_pos+1] = 168;
+				buff[current_pos+2] = 1;
+				buff[current_pos+3] = 121;
+				
+				current_pos+=3;
+				
+				//print_mem(current_pos+1,buff);		
+				
+								
+				if(sendto(sockfd,buff, current_pos+1,0 ,(struct sockaddr*)&clientaddr,sizeof(clientaddr)) < 0){
+					perror("cant send");
+					return -1;
+				}
+				
 			}
 			else{
-				//forwarding
 				
+				//forwarding
+				printf("f1\t");
 				//creation of socket
 				client_fd = socket(AF_INET, SOCK_DGRAM, 0);
 				if(client_fd < 0){
@@ -179,31 +282,30 @@ int recv_query(){
 				server_addr.sin_addr.s_addr = inet_addr(DNS_SERVER_1);
 				memset(server_addr.sin_zero, 0, sizeof(server_addr.sin_zero));
 				
-				if(sendto(client_fd,buff, MAX_SIZE,0 ,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0){
+				if(sendto(client_fd,buff, n,0 ,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0){
 					perror("cant send");
 					return -1;
 				}
 				
+				memset(buff,0,MAX_SIZE);	
+				printf("f2\n");
+		
+				byte_read = recvfrom(client_fd, buff, MAX_SIZE, 0, (struct sockaddr*)&server_addr, (socklen_t*)&addr_len);
+				if(byte_read < 0){
+					perror("can't recv");
+					exit(1);
+				}
+				printf("a");
+				if(sendto(sockfd,buff, byte_read,0 ,(struct sockaddr*)&clientaddr,sizeof(clientaddr)) < 0){
+					perror("cant send");
+					return -1;
+				}
+				printf("a");
+				
 			}
-			
-			memset(buff,0,MAX_SIZE);	
 			
 		}
-		else{
-		
-			byte_read = recvfrom(client_fd, buff, MAX_SIZE, 0, (struct sockaddr*)&server_addr, (socklen_t*)&addr_len);
-			if(byte_read < 0){
-				perror("can't recv");
-				exit(1);
-			}
 			
-			if(sendto(sockfd,buff, MAX_SIZE,0 ,(struct sockaddr*)&clientaddr,sizeof(clientaddr)) < 0){
-				perror("cant send");
-				return -1;
-			}
-		
-			memset(buff,0,MAX_SIZE);
-		}
 	}
 
 	close(sockfd);
@@ -225,7 +327,7 @@ void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 	char rdata[MAX_SIZE] = {0};
 	
 	int current_pos = 0;
-	int i=0,fd;
+	int i=0;
 	char new_name[MAX_SIZE] = {0};
 
 	char buffer[MAX_SIZE] = {0};
@@ -271,7 +373,7 @@ void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 		
 		printf("\n#%d Answer contains :\n",(i+1));
 		memset(rdata,0,MAX_SIZE);
-		convert_ip4(&buffer[current_pos], rdata);
+		convert_name_ref(buffer,current_pos,rdata);
 		printf("\n\tName data: %s\n",rdata);
 		printf("\n\tType data: %d\n",ntohs(r_res->type));
 		printf("\n\tclass data: %d\n",ntohs(r_res->a_class));
@@ -332,7 +434,7 @@ void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 		
 		printf("\n#%d Authoritive contains :\n",(i+1));
 		memset(rdata,0,MAX_SIZE);
-		convert_ip4(&buffer[current_pos], rdata);
+		convert_name_ref(buffer,current_pos,rdata);
 		printf("\n\tName data: %s\n",rdata);
 		printf("\n\tType data: %d\n",ntohs(r_res->type));
 		printf("\n\tclass data: %d\n",ntohs(r_res->a_class));
@@ -395,7 +497,7 @@ void recv_response(int sock_fd, struct sockaddr_in* server_addr){
 		
 		printf("\n#%d additional contains :\n",(i+1));
 		memset(rdata,0,MAX_SIZE);
-		convert_ip4(&buffer[current_pos], rdata);
+		convert_name_ref(buffer,current_pos,rdata);
 		printf("\n\tName data: %s\n",rdata);
 		printf("\n\tType data: %d\n",ntohs(r_res->type));
 		printf("\n\tclass data: %d\n",ntohs(r_res->a_class));
@@ -596,8 +698,8 @@ void convert_name_ref(char* buffer, int index, char* rdata){
 		}
 		
 		length = buffer[i];
-		if(length == 0xc0){
-			i = buffer[i+1];
+		if(length&0xc0){
+			i = ((((buffer[i]&0xff)<<8)+(buffer[i+1]&0xff))&(~0xc000))&(0x0000ffff);
 			continue;
 		}
 		
@@ -619,3 +721,36 @@ void convert_name_ref(char* buffer, int index, char* rdata){
  
 //now we need to consider forwarding a packet
 //and add a mini db for my own recoreds for the dork net
+
+void print_mem(int length, unsigned char* data) {
+    unsigned int i = 0;            
+    unsigned int j = 0;
+                
+    for (i = 0; i < length;) {     
+        printf("0x%08x\t", i);
+        
+        for(j = 0; j < 8; j++) {
+            if(i + j < length)
+                printf("%02x ",data[i+j]);
+            else
+                printf(".. ");
+        }
+        
+        printf("\t");
+        
+        for(j = 0; j < 8; j++) {
+            if(i+j < length) {
+                if(isprint(data[i+j]))
+                    printf("%c",data[i+j]);
+                else
+                    printf(".");
+            }
+            
+            else
+                printf(".");
+        }
+        
+        printf("\n");
+        i += 8;
+    }
+}
